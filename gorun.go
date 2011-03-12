@@ -124,6 +124,16 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 	n := TheChar()
 	gc := filepath.Join(bindir, n+"g")
 	ld := filepath.Join(bindir, n+"l")
+	if _, err := os.Stat(gc); err != nil {
+		if gc, err = exec.LookPath(n + "g"); err != nil {
+			return os.ErrorString("can't find " + n + "g")
+		}
+	}
+	if _, err := os.Stat(ld); err != nil {
+		if ld, err = exec.LookPath(n + "l"); err != nil {
+			return os.ErrorString("can't find " + n + "l")
+		}
+	}
 	gcout := runfile + "." + pid + "." + n
 	ldout := runfile + "." + pid
 	err = Exec([]string{gc, "-o", gcout, sourcefile})
@@ -137,7 +147,6 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 	os.Remove(gcout)
 	return os.Rename(ldout, runfile)
 }
-
 
 func Exec(args []string) os.Error {
 	c, err := exec.Run(args[0], args, os.Environ(), "", exec.DevNull, exec.PassThrough, exec.PassThrough)
