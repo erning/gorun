@@ -43,7 +43,7 @@ func main() {
 
 	err := GoRun(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error: " + err.String())
+		fmt.Fprintln(os.Stderr, "error: "+err.String())
 		os.Exit(1)
 	}
 
@@ -75,7 +75,7 @@ func GoRun(args []string) os.Error {
 		compile = true
 	case !rstat.IsRegular():
 		return os.ErrorString("not a file: " + runfile)
-	case rstat.Mtime_ns < sstat.Mtime_ns || rstat.Permission() & 0700 != 0700:
+	case rstat.Mtime_ns < sstat.Mtime_ns || rstat.Permission()&0700 != 0700:
 		compile = true
 	default:
 		// We have spare cycles. Maybe remove old files.
@@ -188,7 +188,7 @@ func GoRunDir() (rundir string, err os.Error) {
 	if err != nil {
 		return "", os.ErrorString("can't get hostname: " + err.String())
 	}
-	rundir = filepath.Join(home, ".gorun", hostname + "_" + runtime.GOOS + "_" + runtime.GOARCH)
+	rundir = filepath.Join(home, ".gorun", hostname+"_"+runtime.GOOS+"_"+runtime.GOARCH)
 	stat, err := os.Stat(rundir)
 	if err == nil && stat.IsDirectory() {
 		if stat.Permission() != 0700 {
@@ -210,11 +210,11 @@ const CleanFileDelay = 1e9 * 60 * 60 * 24 * 7
 
 func CleanDir(rundir string, now int64) os.Error {
 	cleanedfile := filepath.Join(rundir, "last-cleaned")
-	if info, err := os.Stat(cleanedfile); err == nil && info.Mtime_ns > now - CleanFileDelay {
+	if info, err := os.Stat(cleanedfile); err == nil && info.Mtime_ns > now-CleanFileDelay {
 		// It's been cleaned recently.
 		return nil
 	}
-	f, err := os.Open(cleanedfile, os.O_CREAT|os.O_WRONLY, 0600)
+	f, err := os.Create(cleanedfile)
 	if err != nil {
 		return err
 	}
@@ -225,7 +225,7 @@ func CleanDir(rundir string, now int64) os.Error {
 	}
 
 	// Look for expired files.
-	d, err := os.Open(rundir, os.O_RDONLY, 0)
+	d, err := os.Open(rundir)
 	if err != nil {
 		return err
 	}
