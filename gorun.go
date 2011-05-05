@@ -169,7 +169,11 @@ func GoRunFile(sourcefile string) (rundir, runfile string, err os.Error) {
 	if err != nil {
 		return "", "", err
 	}
-	sourcefile, err = Abs(sourcefile)
+	sourcefile, err = filepath.Abs(sourcefile)
+	if err != nil {
+		return "", "", err
+	}
+	sourcefile, err = filepath.EvalSymlinks(sourcefile)
 	if err != nil {
 		return "", "", err
 	}
@@ -260,16 +264,4 @@ func TheChar() string {
 		return "5"
 	}
 	panic("unknown GOARCH: " + runtime.GOARCH)
-}
-
-// Abs returns an absolute version of path.
-func Abs(path string) (string, os.Error) {
-	if !filepath.IsAbs(path) {
-		wd, err := os.Getwd()
-		if err != nil {
-			return "", os.ErrorString("getwd failed: " + err.String())
-		}
-		path = filepath.Join(wd, path)
-	}
-	return filepath.Clean(path), nil
 }
