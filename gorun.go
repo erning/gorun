@@ -179,31 +179,42 @@ func GoRunFile(sourcefile string) (rundir, runfile string, err os.Error) {
 	return rundir, runfile, nil
 }
 
+func canWrite(stat *os.FileInfo, euid, egid int) bool {
+	perm := stat.Permission()
+	return perm&02 != 0 || perm&020 != 0 && egid == stat.Gid || perm&0200 != 0 && euid == stat.Uid
+}
+
 func GoRunDir() (rundir string, err os.Error) {
-	home := os.Getenv("HOME")
-	if home == "" {
-		return "", os.ErrorString("$HOME is not defined")
+	tempdir := os.TempDir()
+	euid := os.Geteuid()
+	stat, err := os.Stat(tempdir)
+	if err != nil || !stat.IsDirectory() || !canWrite(stat, euid, os.Getegid()) {
+		return "", os.ErrorString("can't write on directory: " + tempdir)
 	}
 	hostname, err := os.Hostname()
 	if err != nil {
 		return "", os.ErrorString("can't get hostname: " + err.String())
 	}
-	rundir = filepath.Join(home, ".gorun", hostname+"_"+runtime.GOOS+"_"+runtime.GOARCH)
-	stat, err := os.Stat(rundir)
-	if err == nil && stat.IsDirectory() {
-		if stat.Permission() != 0700 {
-			return "", os.ErrorString("permission must be 0700: " + rundir)
-		}
-		return rundir, nil
-	}
-	if perr, ok := err.(*os.PathError); ok && perr.Error == os.ENOENT {
-		err := os.MkdirAll(rundir, 0700)
-		if err == nil {
+	prefix := "gorun-" + hostname + "-" + strconv.Itoa(euid)
+	suffix := runtime.GOOS + "_" + runtime.GOARCH
+	prefixi := prefix
+	var i uint
+	for {
+		rundir = filepath.Join(tempdir, prefixi, suffix)
+		stat, err := os.Stat(rundir)
+		if err == nil && stat.IsDirectory() && stat.Permission() == 0700 && stat.Uid == euid {
 			return rundir, nil
 		}
-		return "", os.ErrorString("can't mkdir: " + rundir)
+		if perr, ok := err.(*os.PathError); ok && perr.Error == os.ENOENT {
+			err := os.MkdirAll(rundir, 0700)
+			if err == nil {
+				return rundir, nil
+			}
+		}
+		i++
+		prefixi = prefix + "-" + strconv.Uitoa(i)
 	}
-	return "", os.ErrorString("can't access directory: " + rundir)
+	panic("unreachable")
 }
 
 const CleanFileDelay = 1e9 * 60 * 60 * 24 * 7
