@@ -41,7 +41,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := GoRun(args)
+	err := Run(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "error: "+err.String())
 		os.Exit(1)
@@ -50,9 +50,11 @@ func main() {
 	panic("unreachable")
 }
 
-func GoRun(args []string) os.Error {
+// Run compiles and links the Go source file on args[0] and
+// runs it with arguments args[1:].
+func Run(args []string) os.Error {
 	sourcefile := args[0]
-	rundir, runfile, err := GoRunFile(sourcefile)
+	rundir, runfile, err := RunFile(sourcefile)
 	if err != nil {
 		return err
 	}
@@ -108,6 +110,8 @@ func GoRun(args []string) os.Error {
 	return err
 }
 
+// Compile compiles and links sourcefile and atomically renames the
+// resulting binary to runfile.
 func Compile(sourcefile, runfile string) (err os.Error) {
 	pid := strconv.Itoa(os.Getpid())
 
@@ -140,14 +144,16 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 	if err != nil {
 		return err
 	}
+	defer os.Remove(gcout)
 	err = Exec([]string{ld, "-o", ldout, gcout})
 	if err != nil {
 		return err
 	}
-	os.Remove(gcout)
 	return os.Rename(ldout, runfile)
 }
 
+// Exec runs args[0] with args[1:] arguments and passes through
+// stdout and stderr.
 func Exec(args []string) os.Error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
@@ -163,8 +169,11 @@ func Exec(args []string) os.Error {
 	return nil
 }
 
-func GoRunFile(sourcefile string) (rundir, runfile string, err os.Error) {
-	rundir, err = GoRunDir()
+// RunFile returns the directory and file location where the binary generated
+// for sourcefile should be put.  In case the directory does not yet exist, it
+// will be created by RunDir.
+func RunFile(sourcefile string) (rundir, runfile string, err os.Error) {
+	rundir, err = RunDir()
 	if err != nil {
 		return "", "", err
 	}
@@ -187,7 +196,9 @@ func canWrite(stat *os.FileInfo, euid, egid int) bool {
 	return perm&02 != 0 || perm&020 != 0 && egid == stat.Gid || perm&0200 != 0 && euid == stat.Uid
 }
 
-func GoRunDir() (rundir string, err os.Error) {
+// RunDir returns the directory where binary files generates should be put.
+// In case a safe directory isn't found, one will be created.
+func RunDir() (rundir string, err os.Error) {
 	tempdir := os.TempDir()
 	euid := os.Geteuid()
 	stat, err := os.Stat(tempdir)
@@ -204,6 +215,10 @@ func GoRunDir() (rundir string, err os.Error) {
 	var i uint
 	for {
 		rundir = filepath.Join(tempdir, prefixi, suffix)
+
+		// A directory is only considered safe if the owner matches the
+		// user running the script and its permissions prevent someone
+		// else from writing on it.
 		stat, err := os.Stat(rundir)
 		if err == nil && stat.IsDirectory() && stat.Permission() == 0700 && stat.Uid == euid {
 			return rundir, nil
@@ -220,8 +235,12 @@ func GoRunDir() (rundir string, err os.Error) {
 	panic("unreachable")
 }
 
-const CleanFileDelay = 1e9 * 60 * 60 * 24 * 7
+const CleanFileDelay = 1e9 * 60 * 60 * 24 * 7 // 1 week
 
+// CleanDir removes binary files under rundir in case they were not
+// accessed for more than CleanFileDelay nanoseconds.  A last-cleaned
+// marker file is created so that the next verification is only done
+// after CleanFileDelay nanoseconds.
 func CleanDir(rundir string, now int64) os.Error {
 	cleanedfile := filepath.Join(rundir, "last-cleaned")
 	if info, err := os.Stat(cleanedfile); err == nil && info.Mtime_ns > now-CleanFileDelay {
@@ -246,13 +265,14 @@ func CleanDir(rundir string, now int64) os.Error {
 	infos, err := d.Readdir(-1)
 	expired := now - CleanFileDelay
 	for _, info := range infos {
-		if info.Mtime_ns < expired {
+		if info.Atime_ns < expired {
 			os.Remove(filepath.Join(rundir, info.Name))
 		}
 	}
 	return nil
 }
 
+// TheChar returns the magic architecture char.
 func TheChar() string {
 	switch runtime.GOARCH {
 	case "386":
