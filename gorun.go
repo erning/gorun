@@ -149,17 +149,16 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 }
 
 func Exec(args []string) os.Error {
-	c, err := exec.Run(args[0], args, os.Environ(), "", exec.DevNull, exec.PassThrough, exec.PassThrough)
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
 	base := filepath.Base(args[0])
+	if w, ok := err.(*os.Waitmsg); ok && w.ExitStatus() != 0 {
+		return os.ErrorString(base + " exited with status " + strconv.Itoa(w.ExitStatus()))
+	}
 	if err != nil {
 		return os.ErrorString("failed to run " + base + ": " + err.String())
-	}
-	w, err := c.Process.Wait(0)
-	if err != nil {
-		return os.ErrorString("failed to wait for " + base + ": " + err.String())
-	}
-	if s := w.ExitStatus(); s != 0 {
-		return os.ErrorString(base + " exited with status " + strconv.Itoa(s))
 	}
 	return nil
 }
