@@ -76,7 +76,7 @@ func Run(args []string) os.Error {
 	case err != nil:
 		compile = true
 	case !rstat.IsRegular():
-		return os.ErrorString("not a file: " + runfile)
+		return os.NewError("not a file: " + runfile)
 	case rstat.Mtime_ns < sstat.Mtime_ns || rstat.Permission()&0700 != 0700:
 		compile = true
 	default:
@@ -130,12 +130,12 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 	ld := filepath.Join(bindir, n+"l")
 	if _, err := os.Stat(gc); err != nil {
 		if gc, err = exec.LookPath(n + "g"); err != nil {
-			return os.ErrorString("can't find " + n + "g")
+			return os.NewError("can't find " + n + "g")
 		}
 	}
 	if _, err := os.Stat(ld); err != nil {
 		if ld, err = exec.LookPath(n + "l"); err != nil {
-			return os.ErrorString("can't find " + n + "l")
+			return os.NewError("can't find " + n + "l")
 		}
 	}
 	gcout := runfile + "." + pid + "." + n
@@ -161,10 +161,10 @@ func Exec(args []string) os.Error {
 	err := cmd.Run()
 	base := filepath.Base(args[0])
 	if w, ok := err.(*os.Waitmsg); ok && w.ExitStatus() != 0 {
-		return os.ErrorString(base + " exited with status " + strconv.Itoa(w.ExitStatus()))
+		return os.NewError(base + " exited with status " + strconv.Itoa(w.ExitStatus()))
 	}
 	if err != nil {
-		return os.ErrorString("failed to run " + base + ": " + err.String())
+		return os.NewError("failed to run " + base + ": " + err.String())
 	}
 	return nil
 }
@@ -203,11 +203,11 @@ func RunDir() (rundir string, err os.Error) {
 	euid := os.Geteuid()
 	stat, err := os.Stat(tempdir)
 	if err != nil || !stat.IsDirectory() || !canWrite(stat, euid, os.Getegid()) {
-		return "", os.ErrorString("can't write on directory: " + tempdir)
+		return "", os.NewError("can't write on directory: " + tempdir)
 	}
 	hostname, err := os.Hostname()
 	if err != nil {
-		return "", os.ErrorString("can't get hostname: " + err.String())
+		return "", os.NewError("can't get hostname: " + err.String())
 	}
 	prefix := "gorun-" + hostname + "-" + strconv.Itoa(euid)
 	suffix := runtime.GOOS + "_" + runtime.GOARCH
