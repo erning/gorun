@@ -22,10 +22,11 @@ package main
 // with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import (
-	"exec"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -43,7 +44,7 @@ func main() {
 
 	err := Run(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error: "+err.String())
+		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
 
@@ -52,7 +53,7 @@ func main() {
 
 // Run compiles and links the Go source file on args[0] and
 // runs it with arguments args[1:].
-func Run(args []string) os.Error {
+func Run(args []string) error {
 	sourcefile := args[0]
 	rundir, runfile, err := RunFile(sourcefile)
 	if err != nil {
@@ -76,7 +77,7 @@ func Run(args []string) os.Error {
 	case err != nil:
 		compile = true
 	case !rstat.IsRegular():
-		return os.NewError("not a file: " + runfile)
+		return errors.New("not a file: " + runfile)
 	case rstat.Mtime_ns < sstat.Mtime_ns || rstat.Permission()&0700 != 0700:
 		compile = true
 	default:
@@ -97,7 +98,7 @@ func Run(args []string) os.Error {
 		}
 
 		err = os.Exec(runfile, args, os.Environ())
-		if perr, ok := err.(*os.PathError); ok && perr.Error == os.ENOENT {
+		if perr, ok := err.(*os.PathError); ok && perr.Err == os.ENOENT {
 			// Got cleaned up under our feet.
 			compile = true
 			continue
@@ -112,7 +113,7 @@ func Run(args []string) os.Error {
 
 // Compile compiles and links sourcefile and atomically renames the
 // resulting binary to runfile.
-func Compile(sourcefile, runfile string) (err os.Error) {
+func Compile(sourcefile, runfile string) (err error) {
 	pid := strconv.Itoa(os.Getpid())
 
 	content, err := ioutil.ReadFile(sourcefile)
@@ -130,12 +131,12 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 	ld := filepath.Join(bindir, n+"l")
 	if _, err := os.Stat(gc); err != nil {
 		if gc, err = exec.LookPath(n + "g"); err != nil {
-			return os.NewError("can't find " + n + "g")
+			return errors.New("can't find " + n + "g")
 		}
 	}
 	if _, err := os.Stat(ld); err != nil {
 		if ld, err = exec.LookPath(n + "l"); err != nil {
-			return os.NewError("can't find " + n + "l")
+			return errors.New("can't find " + n + "l")
 		}
 	}
 	gcout := runfile + "." + pid + "." + n
@@ -154,17 +155,17 @@ func Compile(sourcefile, runfile string) (err os.Error) {
 
 // Exec runs args[0] with args[1:] arguments and passes through
 // stdout and stderr.
-func Exec(args []string) os.Error {
+func Exec(args []string) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	base := filepath.Base(args[0])
-	if w, ok := err.(*os.Waitmsg); ok && w.ExitStatus() != 0 {
-		return os.NewError(base + " exited with status " + strconv.Itoa(w.ExitStatus()))
+	if w, ok := err.(*exec.ExitError); ok && w.ExitStatus() != 0 {
+		return errors.New(base + " exited with status " + strconv.Itoa(w.ExitStatus()))
 	}
 	if err != nil {
-		return os.NewError("failed to run " + base + ": " + err.String())
+		return errors.New("failed to run " + base + ": " + err.Error())
 	}
 	return nil
 }
@@ -172,7 +173,7 @@ func Exec(args []string) os.Error {
 // RunFile returns the directory and file location where the binary generated
 // for sourcefile should be put.  In case the directory does not yet exist, it
 // will be created by RunDir.
-func RunFile(sourcefile string) (rundir, runfile string, err os.Error) {
+func RunFile(sourcefile string) (rundir, runfile string, err error) {
 	rundir, err = RunDir()
 	if err != nil {
 		return "", "", err
@@ -198,16 +199,16 @@ func canWrite(stat *os.FileInfo, euid, egid int) bool {
 
 // RunDir returns the directory where binary files generates should be put.
 // In case a safe directory isn't found, one will be created.
-func RunDir() (rundir string, err os.Error) {
+func RunDir() (rundir string, err error) {
 	tempdir := os.TempDir()
 	euid := os.Geteuid()
 	stat, err := os.Stat(tempdir)
 	if err != nil || !stat.IsDirectory() || !canWrite(stat, euid, os.Getegid()) {
-		return "", os.NewError("can't write on directory: " + tempdir)
+		return "", errors.New("can't write on directory: " + tempdir)
 	}
 	hostname, err := os.Hostname()
 	if err != nil {
-		return "", os.NewError("can't get hostname: " + err.String())
+		return "", errors.New("can't get hostname: " + err.Error())
 	}
 	prefix := "gorun-" + hostname + "-" + strconv.Itoa(euid)
 	suffix := runtime.GOOS + "_" + runtime.GOARCH
@@ -223,7 +224,7 @@ func RunDir() (rundir string, err os.Error) {
 		if err == nil && stat.IsDirectory() && stat.Permission() == 0700 && stat.Uid == euid {
 			return rundir, nil
 		}
-		if perr, ok := err.(*os.PathError); ok && perr.Error == os.ENOENT {
+		if perr, ok := err.(*os.PathError); ok && perr.Err == os.ENOENT {
 			err := os.MkdirAll(rundir, 0700)
 			if err == nil {
 				return rundir, nil
@@ -241,7 +242,7 @@ const CleanFileDelay = 1e9 * 60 * 60 * 24 * 7 // 1 week
 // accessed for more than CleanFileDelay nanoseconds.  A last-cleaned
 // marker file is created so that the next verification is only done
 // after CleanFileDelay nanoseconds.
-func CleanDir(rundir string, now int64) os.Error {
+func CleanDir(rundir string, now int64) error {
 	cleanedfile := filepath.Join(rundir, "last-cleaned")
 	if info, err := os.Stat(cleanedfile); err == nil && info.Mtime_ns > now-CleanFileDelay {
 		// It's been cleaned recently.
