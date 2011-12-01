@@ -31,6 +31,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -62,10 +63,10 @@ func Run(args []string) error {
 
 	compile := false
 
-	// Nanoseconds must be called before Stat of sourcefile below,
+	// Now must be called before Stat of sourcefile below,
 	// so that changing the file between Stat and Chtimes still
 	// causes the file to be updated on the next run.
-	now := time.Nanoseconds()
+	now := time.Now()
 
 	sstat, err := os.Stat(sourcefile)
 	if err != nil {
@@ -76,9 +77,9 @@ func Run(args []string) error {
 	switch {
 	case err != nil:
 		compile = true
-	case !rstat.IsRegular():
+	case rstat.Mode()&(os.ModeDir|os.ModeSymlink|os.ModeDevice|os.ModeNamedPipe|os.ModeSocket) != 0:
 		return errors.New("not a file: " + runfile)
-	case rstat.Mtime_ns < sstat.Mtime_ns || rstat.Permission()&0700 != 0700:
+	case rstat.ModTime().Before(sstat.ModTime()) || rstat.Mode().Perm()&0700 != 0700:
 		compile = true
 	default:
 		// We have spare cycles. Maybe remove old files.
@@ -94,7 +95,7 @@ func Run(args []string) error {
 				return err
 			}
 			// If sourcefile was changed, will be updated on next run.
-			os.Chtimes(runfile, sstat.Mtime_ns, sstat.Mtime_ns)
+			os.Chtimes(runfile, sstat.ModTime(), sstat.ModTime())
 		}
 
 		err = os.Exec(runfile, args, os.Environ())
@@ -192,9 +193,14 @@ func RunFile(sourcefile string) (rundir, runfile string, err error) {
 	return rundir, runfile, nil
 }
 
-func canWrite(stat *os.FileInfo, euid, egid int) bool {
-	perm := stat.Permission()
-	return perm&02 != 0 || perm&020 != 0 && egid == stat.Gid || perm&0200 != 0 && euid == stat.Uid
+func sysStat(stat os.FileInfo) *syscall.Stat_t {
+	return stat.(*os.FileStat).Sys.(*syscall.Stat_t)
+}
+
+func canWrite(stat os.FileInfo, euid, egid int) bool {
+	perm := stat.Mode().Perm()
+	sstat := sysStat(stat)
+	return perm&02 != 0 || perm&020 != 0 && uint32(egid) == sstat.Gid || perm&0200 != 0 && uint32(euid) == sstat.Uid
 }
 
 // RunDir returns the directory where binary files generates should be put.
@@ -203,7 +209,7 @@ func RunDir() (rundir string, err error) {
 	tempdir := os.TempDir()
 	euid := os.Geteuid()
 	stat, err := os.Stat(tempdir)
-	if err != nil || !stat.IsDirectory() || !canWrite(stat, euid, os.Getegid()) {
+	if err != nil || !stat.IsDir() || !canWrite(stat, euid, os.Getegid()) {
 		return "", errors.New("can't write on directory: " + tempdir)
 	}
 	hostname, err := os.Hostname()
@@ -221,7 +227,7 @@ func RunDir() (rundir string, err error) {
 		// user running the script and its permissions prevent someone
 		// else from writing on it.
 		stat, err := os.Stat(rundir)
-		if err == nil && stat.IsDirectory() && stat.Permission() == 0700 && stat.Uid == euid {
+		if err == nil && stat.IsDir() && stat.Mode().Perm() == 0700 && sysStat(stat).Uid == uint32(euid) {
 			return rundir, nil
 		}
 		if perr, ok := err.(*os.PathError); ok && perr.Err == os.ENOENT {
@@ -236,15 +242,16 @@ func RunDir() (rundir string, err error) {
 	panic("unreachable")
 }
 
-const CleanFileDelay = 1e9 * 60 * 60 * 24 * 7 // 1 week
+const CleanFileDelay = time.Hour * 24 * 7
 
 // CleanDir removes binary files under rundir in case they were not
 // accessed for more than CleanFileDelay nanoseconds.  A last-cleaned
 // marker file is created so that the next verification is only done
 // after CleanFileDelay nanoseconds.
-func CleanDir(rundir string, now int64) error {
+func CleanDir(rundir string, now time.Time) error {
 	cleanedfile := filepath.Join(rundir, "last-cleaned")
-	if info, err := os.Stat(cleanedfile); err == nil && info.Mtime_ns > now-CleanFileDelay {
+	cleanLine := now.Add(-CleanFileDelay)
+	if info, err := os.Stat(cleanedfile); err == nil && info.ModTime().After(cleanLine) {
 		// It's been cleaned recently.
 		return nil
 	}
@@ -252,7 +259,7 @@ func CleanDir(rundir string, now int64) error {
 	if err != nil {
 		return err
 	}
-	_, err = f.Write([]byte(strconv.Itoa64(now)))
+	_, err = f.Write([]byte(now.Format(time.RFC3339)))
 	f.Close()
 	if err != nil {
 		return err
@@ -264,10 +271,11 @@ func CleanDir(rundir string, now int64) error {
 		return err
 	}
 	infos, err := d.Readdir(-1)
-	expired := now - CleanFileDelay
 	for _, info := range infos {
-		if info.Atime_ns < expired {
-			os.Remove(filepath.Join(rundir, info.Name))
+		atim := info.(*os.FileStat).Sys.(*syscall.Stat_t).Atim
+		access := time.Unix(atim.Sec, atim.Nsec)
+		if access.Before(cleanLine) {
+			os.Remove(filepath.Join(rundir, info.Name()))
 		}
 	}
 	return nil
