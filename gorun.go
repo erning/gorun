@@ -219,7 +219,7 @@ func RunDir() (rundir string, err error) {
 	prefix := "gorun-" + hostname + "-" + strconv.Itoa(euid)
 	suffix := runtime.GOOS + "_" + runtime.GOARCH
 	prefixi := prefix
-	var i uint
+	var i uint64
 	for {
 		rundir = filepath.Join(tempdir, prefixi, suffix)
 
@@ -237,7 +237,7 @@ func RunDir() (rundir string, err error) {
 			}
 		}
 		i++
-		prefixi = prefix + "-" + strconv.Uitoa(i)
+		prefixi = prefix + "-" + strconv.FormatUint(i, 10)
 	}
 	panic("unreachable")
 }
