@@ -194,7 +194,7 @@ func RunFile(sourcefile string) (rundir, runfile string, err error) {
 }
 
 func sysStat(stat os.FileInfo) *syscall.Stat_t {
-	return stat.(*os.FileStat).Sys.(*syscall.Stat_t)
+	return stat.Sys().(*syscall.Stat_t)
 }
 
 func canWrite(stat os.FileInfo, euid, egid int) bool {
@@ -272,7 +272,7 @@ func CleanDir(rundir string, now time.Time) error {
 	}
 	infos, err := d.Readdir(-1)
 	for _, info := range infos {
-		atim := info.(*os.FileStat).Sys.(*syscall.Stat_t).Atim
+		atim := sysStat(info).Atim
 		access := time.Unix(int64(atim.Sec), int64(atim.Nsec))
 		if access.Before(cleanLine) {
 			os.Remove(filepath.Join(rundir, info.Name()))
