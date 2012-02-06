@@ -126,7 +126,7 @@ func Compile(sourcefile, runfile string) (err error) {
 		defer os.Remove(sourcefile)
 	}
 
-	bindir := filepath.Join(runtime.GOROOT(), "bin")
+	bindir := filepath.Join(runtime.GOROOT(), "bin", "tool")
 	n := TheChar()
 	gc := filepath.Join(bindir, n+"g")
 	ld := filepath.Join(bindir, n+"l")
