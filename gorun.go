@@ -98,7 +98,7 @@ func Run(args []string) error {
 			os.Chtimes(runfile, sstat.ModTime(), sstat.ModTime())
 		}
 
-		err = os.Exec(runfile, args, os.Environ())
+		err = syscall.Exec(runfile, args, os.Environ())
 		if perr, ok := err.(*os.PathError); ok && perr.Err == os.ENOENT {
 			// Got cleaned up under our feet.
 			compile = true
