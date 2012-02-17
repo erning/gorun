@@ -99,7 +99,7 @@ func Run(args []string) error {
 		}
 
 		err = syscall.Exec(runfile, args, os.Environ())
-		if perr, ok := err.(*os.PathError); ok && perr.Err == os.ENOENT {
+		if os.IsNotExist(err) {
 			// Got cleaned up under our feet.
 			compile = true
 			continue
@@ -230,7 +230,7 @@ func RunDir() (rundir string, err error) {
 		if err == nil && stat.IsDir() && stat.Mode().Perm() == 0700 && sysStat(stat).Uid == uint32(euid) {
 			return rundir, nil
 		}
-		if perr, ok := err.(*os.PathError); ok && perr.Err == os.ENOENT {
+		if os.IsNotExist(err) {
 			err := os.MkdirAll(rundir, 0700)
 			if err == nil {
 				return rundir, nil
