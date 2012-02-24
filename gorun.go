@@ -162,9 +162,6 @@ func Exec(args []string) error {
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
 	base := filepath.Base(args[0])
-	if w, ok := err.(*exec.ExitError); ok && w.ExitStatus() != 0 {
-		return errors.New(base + " exited with status " + strconv.Itoa(w.ExitStatus()))
-	}
 	if err != nil {
 		return errors.New("failed to run " + base + ": " + err.Error())
 	}
