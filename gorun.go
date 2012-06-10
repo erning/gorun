@@ -126,28 +126,21 @@ func Compile(sourcefile, runfile string) (err error) {
 		defer os.Remove(sourcefile)
 	}
 
-	bindir := filepath.Join(runtime.GOROOT(), "bin", "tool")
+	gotool := filepath.Join(runtime.GOROOT(), "bin", "go")
+	if _, err := os.Stat(gotool); err != nil {
+		if gotool, err = exec.LookPath("go"); err != nil {
+			return errors.New("can't find go tool")
+		}
+	}
 	n := TheChar()
-	gc := filepath.Join(bindir, n+"g")
-	ld := filepath.Join(bindir, n+"l")
-	if _, err := os.Stat(gc); err != nil {
-		if gc, err = exec.LookPath(n + "g"); err != nil {
-			return errors.New("can't find " + n + "g")
-		}
-	}
-	if _, err := os.Stat(ld); err != nil {
-		if ld, err = exec.LookPath(n + "l"); err != nil {
-			return errors.New("can't find " + n + "l")
-		}
-	}
 	gcout := runfile + "." + pid + "." + n
 	ldout := runfile + "." + pid
-	err = Exec([]string{gc, "-o", gcout, sourcefile})
+	err = Exec([]string{gotool, "tool", n+"g", "-o", gcout, sourcefile})
 	if err != nil {
 		return err
 	}
 	defer os.Remove(gcout)
-	err = Exec([]string{ld, "-o", ldout, gcout})
+	err = Exec([]string{gotool, "tool", n+"l", "-o", ldout, gcout})
 	if err != nil {
 		return err
 	}
