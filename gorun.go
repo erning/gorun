@@ -135,12 +135,12 @@ func Compile(sourcefile, runfile string) (err error) {
 	n := TheChar()
 	gcout := runfile + "." + pid + "." + n
 	ldout := runfile + "." + pid
-	err = Exec([]string{gotool, "tool", n+"g", "-o", gcout, sourcefile})
+	err = Exec([]string{gotool, "tool", n + "g", "-o", gcout, sourcefile})
 	if err != nil {
 		return err
 	}
 	defer os.Remove(gcout)
-	err = Exec([]string{gotool, "tool", n+"l", "-o", ldout, gcout})
+	err = Exec([]string{gotool, "tool", n + "l", "-o", ldout, gcout})
 	if err != nil {
 		return err
 	}
