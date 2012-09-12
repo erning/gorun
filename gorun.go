@@ -262,7 +262,7 @@ func CleanDir(rundir string, now time.Time) error {
 	}
 	infos, err := d.Readdir(-1)
 	for _, info := range infos {
-		atim := sysStat(info).Atim
+		atim := atime(info)
 		access := time.Unix(int64(atim.Sec), int64(atim.Nsec))
 		if access.Before(cleanLine) {
 			os.Remove(filepath.Join(rundir, info.Name()))
