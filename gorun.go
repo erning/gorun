@@ -132,19 +132,13 @@ func Compile(sourcefile, runfile string) (err error) {
 			return errors.New("can't find go tool")
 		}
 	}
-	n := TheChar()
-	gcout := runfile + "." + pid + "." + n
-	ldout := runfile + "." + pid
-	err = Exec([]string{gotool, "tool", n + "g", "-o", gcout, sourcefile})
+
+	out := runfile + "." + pid
+	err = Exec([]string{gotool, "build", "-o", out, sourcefile})
 	if err != nil {
 		return err
 	}
-	defer os.Remove(gcout)
-	err = Exec([]string{gotool, "tool", n + "l", "-o", ldout, gcout})
-	if err != nil {
-		return err
-	}
-	return os.Rename(ldout, runfile)
+	return os.Rename(out, runfile)
 }
 
 // Exec runs args[0] with args[1:] arguments and passes through
