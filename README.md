@@ -7,7 +7,7 @@ gorun is a tool enabling one to put a "bang line" in the source code of a Go pro
 As an example, copy the following content to a file named "hello.go" (or "hello", if you prefer):
 
 ```go
-#!/usr/bin/gorun
+#!/usr/bin/env gorun
 
 package main
 
@@ -70,16 +70,24 @@ You can remove these files, but there's no reason to do this. These compiled fil
 There are Ubuntu packages available that include gorun:
 
 ```
-sudo add-apt-repository ppa:gophers/go 
-sudo apt-get update 
-sudo apt-get install golang 
+$ sudo add-apt-repository ppa:gophers/go 
+$ sudo apt-get update 
+$ sudo apt-get install golang 
 ```
 
 ## How to build and install gorun from source
 Just use "go get" as usual:
 
+**Option 1:** from Launchpad (requires [Bazaar](http://wiki.bazaar.canonical.com/)):
+
 ```
 $ go get launchpad.net/gorun
+```
+
+**Option 2:** from Github (requires [Git](http://git-scm.com)):
+
+```
+$ go get github.com/erning/gorun
 ```
 
 ## Reporting bugs
