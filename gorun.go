@@ -172,6 +172,7 @@ func RunFile(sourcefile string) (rundir, runfile string, err error) {
 		return "", "", err
 	}
 	runfile = strings.Replace(sourcefile, "%", "%%", -1)
+	runfile = strings.Replace(runfile, string(filepath.Separator), "ROOT%", 1)
 	runfile = strings.Replace(runfile, string(filepath.Separator), "%", -1)
 	runfile = filepath.Join(rundir, runfile)
 	runfile += ".gorun"
