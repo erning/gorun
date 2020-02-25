@@ -9,19 +9,20 @@
 //
 package main
 
-// This program is free software: you can redistribute it and/or modify it 
-// under the terms of the GNU General Public License version 3, as published 
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License version 3, as published
 // by the Free Software Foundation.
-// 
-// This program is distributed in the hope that it will be useful, but 
-// WITHOUT ANY WARRANTY; without even the implied warranties of 
-// MERCHANTABILITY, SATISFACTORY QUALITY, or FITNESS FOR A PARTICULAR 
+//
+// This program is distributed in the hope that it will be useful, but
+// WITHOUT ANY WARRANTY; without even the implied warranties of
+// MERCHANTABILITY, SATISFACTORY QUALITY, or FITNESS FOR A PARTICULAR
 // PURPOSE.  See the GNU General Public License for more details.
-// 
-// You should have received a copy of the GNU General Public License along 
+//
+// You should have received a copy of the GNU General Public License along
 // with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -39,13 +40,13 @@ func main() {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
+		_, _ = fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
 		os.Exit(1)
 	}
 
 	err := Run(args)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "error: "+err.Error())
+		_, _ = fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
 
@@ -56,7 +57,7 @@ func main() {
 // runs it with arguments args[1:].
 func Run(args []string) error {
 	sourcefile := args[0]
-	rundir, runfile, err := RunFile(sourcefile)
+	runBaseDir, runFile, runCmdDir, err := RunFilePaths(sourcefile)
 	if err != nil {
 		return err
 	}
@@ -73,32 +74,32 @@ func Run(args []string) error {
 		return err
 	}
 
-	rstat, err := os.Stat(runfile)
+	rstat, err := os.Stat(runFile)
 	switch {
 	case err != nil:
 		compile = true
 	case rstat.Mode()&(os.ModeDir|os.ModeSymlink|os.ModeDevice|os.ModeNamedPipe|os.ModeSocket) != 0:
-		return errors.New("not a file: " + runfile)
+		return errors.New("not a file: " + runFile)
 	case rstat.ModTime().Before(sstat.ModTime()) || rstat.Mode().Perm()&0700 != 0700:
 		compile = true
 	default:
 		// We have spare cycles. Maybe remove old files.
-		if err := os.Chtimes(runfile, now, now); err == nil {
-			CleanDir(rundir, now)
+		if err := os.Chtimes(runBaseDir, now, now); err == nil {
+			CleanDir(runBaseDir, now)
 		}
 	}
 
 	for retry := 3; retry > 0; retry-- {
 		if compile {
-			err := Compile(sourcefile, runfile)
+			err := Compile(sourcefile, runFile, runCmdDir)
 			if err != nil {
 				return err
 			}
 			// If sourcefile was changed, will be updated on next run.
-			os.Chtimes(runfile, sstat.ModTime(), sstat.ModTime())
+			os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
 		}
 
-		err = syscall.Exec(runfile, args, os.Environ())
+		err = syscall.Exec(runFile, args, os.Environ())
 		if os.IsNotExist(err) {
 			// Got cleaned up under our feet.
 			compile = true
@@ -112,42 +113,125 @@ func Run(args []string) error {
 	return err
 }
 
+func getSection(content []byte, sectionName string) (section []byte) {
+	start := "// " + sectionName + " >>>"
+	end := "// <<< " + sectionName
+	startIdx := bytes.Index(content, []byte(start))
+	if startIdx >= 0 {
+		idxEnd := bytes.Index(content, []byte(end))
+		if idxEnd > startIdx {
+			goMod := string(content[startIdx+len(start) : idxEnd])
+			goMod = strings.ReplaceAll(goMod, "// ", "")
+			goMod = strings.ReplaceAll(goMod, "//", "")
+			return []byte(goMod)
+		}
+	}
+	return []byte("")
+}
+
+func writeFileFromComments(content []byte, sectionName string, file string) (written bool, err error) {
+	// Write a go.mod file from inside the comments
+	section := getSection(content, sectionName)
+	if len(section) > 0 {
+		err = ioutil.WriteFile(file, section, 0600)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Failed to write "+sectionName+" to "+file)
+			return
+		}
+		written = true
+	}
+	return
+}
+
 // Compile compiles and links sourcefile and atomically renames the
 // resulting binary to runfile.
-func Compile(sourcefile, runfile string) (err error) {
+func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 	pid := strconv.Itoa(os.Getpid())
 
+	err = os.MkdirAll(runCmdDir, 0700)
+	if err != nil {
+		return err
+	}
+	var writtenSource bool
 	content, err := ioutil.ReadFile(sourcefile)
 	if len(content) > 2 && content[0] == '#' && content[1] == '!' {
 		content[0] = '/'
 		content[1] = '/'
-		sourcefile = runfile + "." + pid + ".go"
+		writtenSource = true
+	}
+
+	// TODO in an ideal world to protect against potential races on multiple runs, we'd
+	// include <pid> in the name, but go build wants it called go.mod, so we could put
+	// it all in its separate directory and copy over when done.
+	// Write a go.mod file from inside the comments
+	modFile := runCmdDir + "go.mod"
+	os.Remove(modFile)
+	writtenMod, err := writeFileFromComments(content, "go.mod", modFile)
+	if err != nil {
+		return
+	}
+
+	// TODO as go.mod
+	// Write a go.sum file from inside the comments
+	sumFile := runCmdDir + "go.sum"
+	os.Remove(sumFile)
+	writtenSum, err := writeFileFromComments(content, "go.sum", sumFile)
+	if err != nil {
+		return
+	}
+
+	// only copy the source file to the runCmdDir if something needs to be changed about it
+	// or if it has an embedded go.mod or go.sum
+	execDir := ""
+	if writtenSource || writtenMod || writtenSum {
+		sourcefile = runFile + "." + pid + ".go"
 		ioutil.WriteFile(sourcefile, content, 0600)
 		defer os.Remove(sourcefile)
+		execDir = runCmdDir
+	}
+
+	// use the default environment before adding our overrides
+	var env []string
+	section := getSection(content, "go.env")
+	if len(section) > 0 {
+		env = os.Environ()
+		env = append(env, strings.Split(string(section), "\n")...)
 	}
 
 	gotool := filepath.Join(runtime.GOROOT(), "bin", "go")
+
 	if _, err := os.Stat(gotool); err != nil {
 		if gotool, err = exec.LookPath("go"); err != nil {
 			return errors.New("can't find go tool")
 		}
 	}
 
-	out := runfile + "." + pid
-	err = Exec([]string{gotool, "build", "-o", out, sourcefile})
+	out := runFile + "." + pid
+
+	err = Exec(execDir, env, []string{gotool, "build", "-o", out, sourcefile})
 	if err != nil {
 		return err
 	}
-	return os.Rename(out, runfile)
+	return os.Rename(out, runFile)
 }
 
 // Exec runs args[0] with args[1:] arguments and passes through
 // stdout and stderr.
-func Exec(args []string) error {
+func Exec(dir string, env []string, args []string) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
+	if dir != "" {
+		cmd.Dir = dir
+	}
+
+	if cmd.Env != nil {
+		cmd.Env = append(cmd.Env, env...)
+	} else {
+		cmd.Env = env
+	}
 	err := cmd.Run()
+
 	base := filepath.Base(args[0])
 	if err != nil {
 		return errors.New("failed to run " + base + ": " + err.Error())
@@ -155,28 +239,38 @@ func Exec(args []string) error {
 	return nil
 }
 
-// RunFile returns the directory and file location where the binary generated
-// for sourcefile should be put.  In case the directory does not yet exist, it
-// will be created by RunDir.
-func RunFile(sourcefile string) (rundir, runfile string, err error) {
-	rundir, err = RunDir()
+// RunFilePaths returns various paths involved in building and caching a gorun binary.
+//
+// Each cached gorun binary lives under its own directory to allow separate go.mod
+// and go.sum files to be embedded and extracted from the source file.
+//
+// Note that runBaseDir contains directories for each gorun binary.
+// runFile is the full path to the cached gorun binary
+// runCmdDir is the directory inside runBaseDir where runFile lives.
+func RunFilePaths(sourcefile string) (runBaseDir, runFile string, runCmdDir string, err error) {
+	runBaseDir, err = RunBaseDir()
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	sourcefile, err = filepath.Abs(sourcefile)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	sourcefile, err = filepath.EvalSymlinks(sourcefile)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
-	runfile = strings.Replace(sourcefile, "%", "%%", -1)
-	runfile = strings.Replace(runfile, string(filepath.Separator), "ROOT%", 1)
-	runfile = strings.Replace(runfile, string(filepath.Separator), "%", -1)
-	runfile = filepath.Join(rundir, runfile)
-	runfile += ".gorun"
-	return rundir, runfile, nil
+	pathElements := strings.Split(sourcefile, string(filepath.Separator))
+	baseFileName := pathElements[len(pathElements)-1]
+	runFile = strings.Replace(sourcefile, "_", "__", -1)
+	runFile = strings.Replace(runFile, string(filepath.Separator), "ROOT_", 1)
+	runFile = strings.Replace(runFile, string(filepath.Separator), "_", -1)
+	runCmdDir = filepath.Join(runBaseDir, runFile) + string(filepath.Separator)
+
+	runFile = runCmdDir
+	runFile += baseFileName + ".gorun"
+
+	return
 }
 
 func sysStat(stat os.FileInfo) *syscall.Stat_t {
@@ -191,7 +285,7 @@ func canWrite(stat os.FileInfo, euid, egid int) bool {
 
 // RunDir returns the directory where binary files generates should be put.
 // In case a safe directory isn't found, one will be created.
-func RunDir() (rundir string, err error) {
+func RunBaseDir() (rundir string, err error) {
 	tempdir := os.TempDir()
 	euid := os.Geteuid()
 	stat, err := os.Stat(tempdir)
@@ -234,8 +328,8 @@ const CleanFileDelay = time.Hour * 24 * 7
 // accessed for more than CleanFileDelay nanoseconds.  A last-cleaned
 // marker file is created so that the next verification is only done
 // after CleanFileDelay nanoseconds.
-func CleanDir(rundir string, now time.Time) error {
-	cleanedfile := filepath.Join(rundir, "last-cleaned")
+func CleanDir(runBaseDir string, now time.Time) error {
+	cleanedfile := filepath.Join(runBaseDir, "last-cleaned")
 	cleanLine := now.Add(-CleanFileDelay)
 	if info, err := os.Stat(cleanedfile); err == nil && info.ModTime().After(cleanLine) {
 		// It's been cleaned recently.
@@ -252,7 +346,7 @@ func CleanDir(rundir string, now time.Time) error {
 	}
 
 	// Look for expired files.
-	d, err := os.Open(rundir)
+	d, err := os.Open(runBaseDir)
 	if err != nil {
 		return err
 	}
@@ -261,7 +355,7 @@ func CleanDir(rundir string, now time.Time) error {
 		atim := atime(info)
 		access := time.Unix(int64(atim.Sec), int64(atim.Nsec))
 		if access.Before(cleanLine) {
-			os.Remove(filepath.Join(rundir, info.Name()))
+			os.RemoveAll(filepath.Join(runBaseDir, info.Name()))
 		}
 	}
 	return nil

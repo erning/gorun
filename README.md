@@ -33,6 +33,7 @@ gorun will:
   * replace the process rather than using a child
   * pass arguments to the compiled application properly
   * handle well GOROOT, GOROOT_FINAL and the location of the toolchain
+  * support embedded go.mod, go.sum and environment variables used for compiling - can ensure a repeatable build
 
 ## Is it slow?
 No, it's not, thanks to the Go (gc) compiler suite, which compiles code surprisingly fast.
@@ -102,3 +103,27 @@ This document is licensed under Creative Commons Attribution-ShareAlike 3.0 Lice
 ## Contact
 To get in touch, send a message to gustavo.niemeyer@canonical.com
 
+## Repeatable builds
+To protect against changing/different dependencies compiled with the script, it supports embedding 
+go.mod, go.sum contents and environment variables in the file as a comment. Fictitious example:
+    
+    // go.mod >>>
+    // module github.com/a/b
+    // go 1.13
+    // require github.com/c/d v0.0.0-20200225084820-12345affa
+    // require mycompany.com/e/f v0.0.0-20200225084120-1849135
+    // <<< go.mod
+    //
+    // go.env >>>
+    // GOPRIVATE=mycompany.com
+    // GO111MODULE=on
+    // <<< go.env
+    //
+    // go.sum >>>
+    // github.com/c v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
+    // <<< go.sum
+    
+    package main
+    
+    import (
+    ...
