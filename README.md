@@ -127,3 +127,27 @@ go.mod, go.sum contents and environment variables in the file as a comment. Fict
     
     import (
     ...
+
+To support this, an environment variable ```GORUN_ARGS``` can be set to diff, extract or embed these sections:
+
+Check whether the files go.mod/go.sum on disc match the embedded sections inside the source file
+
+    GORUN_ARGS="-diff -noRun" gorun sourcefile.go
+    gorun -diff sourcefile.go
+
+Put any go.mod/go.sum files in the same directory as the sourcefile.go file in the comments in the file
+
+    GORUN_ARGS="-embed -noRun" gorun sourcefile.go
+    gorun -embed -noRun sourcefile.go
+
+Extract the commented sections of go.mod/go.sum to files alongside the source file:
+
+    GORUN_ARGS="-extract -noRun" gorun sourcefile.go
+    gorun -extract -noRun sourcefile.go
+
+A default that allows developing and auto including the go.mod/go.sum in to the source file would be:
+
+    GORUN_ARGS="-embed" gorun sourcefile.go
+    
+For safety, the above by default will not embed files if the sourcefile lives under /bin /sbin /opt or /usr.
+Set -embedIgnoreRegex to '.*' to override this behaviour

@@ -24,11 +24,13 @@ package main
 import (
 	"bytes"
 	"errors"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -36,15 +38,63 @@ import (
 	"time"
 )
 
-func main() {
-	args := os.Args[1:]
+func Usage() {
+	fmt.Fprintf(flag.CommandLine.Output(),
+		flag.CommandLine.Name()+`: Compile and run a go program directly.
 
-	if len(args) == 0 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
+Options can be provided via GORUN_ARGS environment variable, or on the command line
+
+`)
+	fmt.Fprintf(flag.CommandLine.Output(), "%s [options] <sourceFile.go>:\n", flag.CommandLine.Name())
+	flag.PrintDefaults()
+}
+
+func main() {
+	flag.Usage = Usage
+
+	// gather up all args, command line and GORUN_ARGS in to one array
+	gorunArgsEnv, _ := os.LookupEnv("GORUN_ARGS")
+	gorunArgs := strings.Fields(gorunArgsEnv)
+	args := append(gorunArgs, os.Args[1:]...)
+
+	diffArg := flag.Bool("diff", false, "show diff between embedded comments and filesystem go.mod/go.sum")
+	embedArg := flag.Bool("embed", false, "embed filesystem go.mod/go.sum as comments in source file")
+	extractArg := flag.Bool("extract", false, "extract the comments to filesystem go.mod/go.sum")
+	embedIgnoreRegex := flag.String("embedIgnoreRegex", "^/(bin|sbin|usr|opt|root)/(.*)", "Do not embed if the filepath of source file matches this golang regex")
+	noRun := flag.Bool("noRun", false, "don't attempt to compile or run")
+	flag.CommandLine.Parse(args)
+
+	if len(args) == flag.NFlag() {
+		Usage()
 		os.Exit(1)
 	}
 
-	err := Run(args)
+	sourceFile, err := realPath(flag.Args()[0])
+	if err != nil {
+		fmt.Printf("Failed to find source file %q", err.Error())
+		return
+	}
+
+	if *diffArg {
+		err = diff(sourceFile)
+	} else if *extractArg {
+		err = extract(sourceFile)
+	} else if *embedArg {
+		err = embed(sourceFile, sourceFile, *embedIgnoreRegex)
+	}
+
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Failed to run embedded command %q\n", err.Error())
+		os.Exit(1)
+	}
+	if *noRun {
+		if !*diffArg && !*extractArg && !*embedArg {
+			_, _ = fmt.Fprintln(os.Stderr, "-noRun specified, but nothing else specified to do. Exit.")
+		}
+		os.Exit(0)
+	}
+
+	err = Run(flag.Args())
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
@@ -53,23 +103,194 @@ func main() {
 	panic("unreachable")
 }
 
+func loadFile(filename string) (found bool, content []byte, err error) {
+	_, err = os.Stat(filename)
+	if err != nil {
+		return false, nil, nil // no error if file not there
+	}
+	content, err = ioutil.ReadFile(filename)
+	if err != nil {
+		return // error if file there but can't be read
+	}
+	found = true
+	// get rid of extra new lines and whitespace
+	content = bytes.TrimSpace(content)
+	content = bytes.Replace(content, []byte("\n\n"), []byte("\n"), -1)
+	return
+}
+
+func diffBytes(content []byte, dir string, sectionName string) (diff string, err error) {
+	section := getSection(content, sectionName)
+	section = bytes.TrimSpace(section)
+	section = bytes.Replace(section, []byte("\n\n"), []byte("\n"), -1)
+
+	foundOnDisc, sectionFromFile, err := loadFile(filepath.Join(dir, sectionName))
+	if err != nil { // file exists but unable to read
+		return
+	}
+	if !foundOnDisc && len(section) == 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "OK: section %q not embedded or on disc\n", sectionName)
+		return "", nil
+	}
+	if !foundOnDisc {
+		_, _ = fmt.Fprintf(os.Stderr, "WARN: embedded %q exists but nothing on disc\n", sectionName)
+		return "embeddedExists", nil
+	}
+	if len(section) == 0 && len(sectionFromFile) > 0 {
+		_, _ = fmt.Fprintf(os.Stderr, "WARN: on disc %q exists but embedded doesn't\n", sectionName)
+		return "discExists", nil
+	}
+	if bytes.Equal(sectionFromFile, section) {
+		_, _ = fmt.Fprintf(os.Stderr, "OK: embedded %q exists and same as on disc\n", sectionName)
+		return "", nil
+	}
+	_, _ = fmt.Fprintf(os.Stderr, "WARN: embedded %q exists and different to on disc\n", sectionName)
+	return "diff", nil
+}
+
+func diff(sourceFile string) (err error) {
+	content, err := ioutil.ReadFile(sourceFile)
+	if err != nil {
+		return
+	}
+	diff1, err := diffBytes(content, filepath.Dir(sourceFile), "go.mod")
+	if err != nil {
+		return
+	}
+	diff2, err := diffBytes(content, filepath.Dir(sourceFile), "go.sum")
+	if err != nil {
+		return
+	}
+
+	if diff1 != "" || diff2 != "" {
+		_, _ = fmt.Fprintln(os.Stderr, "Diffs found\n")
+		os.Exit(1)
+	}
+	return
+}
+
+func extractToFile(content []byte, dir string, section string) (err error) {
+	file := filepath.Join(dir, section)
+	_, err = writeFileFromComments(content, section, file)
+	return
+}
+
+func extract(sourceFile string) (err error) {
+	content, err := ioutil.ReadFile(sourceFile)
+	if err != nil {
+		return
+	}
+	err = extractToFile(content, filepath.Dir(sourceFile), "go.sum")
+	if err != nil {
+		return
+	}
+	err = extractToFile(content, filepath.Dir(sourceFile), "go.mod")
+	return
+}
+
+func commentSection(content []byte, header string, trailer string) (commented []byte) {
+	commented = bytes.ReplaceAll(content, []byte("\n"), []byte("\n// "))
+	commented = append(commented, []byte("\n")...)
+	commented = append([]byte("// "), commented...)
+	commented = append([]byte(header), commented...)
+	commented = append(commented, []byte(trailer)...)
+	return
+}
+
+func header(section string) (header string) {
+	return "// " + section + " >>>\n"
+}
+
+func trailer(section string) (trailer string) {
+	return "// <<< " + section + "\n"
+}
+
+func embed(sourceFile string, destFile string, embedIgnoreRegex string) (err error) {
+	matched, err := regexp.Match(embedIgnoreRegex, []byte(sourceFile))
+	if matched {
+		return nil
+	}
+
+	content, err := ioutil.ReadFile(sourceFile)
+	if err != nil {
+		return
+	}
+	foundSumOnDisc, sumContent, err := loadFile(filepath.Join(filepath.Dir(sourceFile), "go.sum"))
+	if err != nil {
+		return
+	}
+	foundModOnDisc, modContent, err := loadFile(filepath.Join(filepath.Dir(sourceFile), "go.mod"))
+	if err != nil {
+		return
+	}
+
+	// let's only delete an embedded section if there is a section file (e.g. go.sum) on disc alongside
+	startSumIdx := 0
+	if foundSumOnDisc {
+		startSumIdx, content = removeSection(content, "go.sum")
+		idx := 0
+		if startSumIdx >= 0 {
+			idx = startSumIdx
+		}
+		var contentStart, contentTrailer []byte
+		contentStart = append(contentStart, content[0:idx]...)
+		contentTrailer = append(contentTrailer, content[idx:len(content)]...)
+		content = append(contentStart, commentSection(sumContent, header("go.sum"), trailer("go.sum"))...)
+		content = append(content, contentTrailer...)
+	}
+
+	if foundModOnDisc {
+		var startModIdx int
+		startModIdx, content = removeSection(content, "go.mod")
+		idx := 0
+		if startModIdx >= 0 {
+			idx = startModIdx
+		}
+		var contentStart, contentTrailer []byte
+		contentStart = append(contentStart, content[0:idx]...)
+		// only add a newline between sections go.sum and go.mod sections if we've added a new go.sum section,
+		// otherwise leave it as the user had it
+		if foundSumOnDisc && startSumIdx < 0 {
+			contentTrailer = append(contentTrailer, []byte("\n")...)
+		}
+		contentTrailer = append(contentTrailer, content[idx:len(content)]...)
+		content = append(contentStart, commentSection(modContent, header("go.mod"), trailer("go.mod"))...)
+		content = append(content, contentTrailer...)
+	}
+
+	err = ioutil.WriteFile(destFile, content, 0600)
+	return
+}
+
+func realPath(sourceFile string) (realPath string, err error) {
+	sourceFile, err = filepath.Abs(sourceFile)
+	if err != nil {
+		return "", err
+	}
+	realPath, err = filepath.EvalSymlinks(sourceFile)
+	if err != nil {
+		return "", err
+	}
+	return
+}
+
 // Run compiles and links the Go source file on args[0] and
 // runs it with arguments args[1:].
 func Run(args []string) error {
-	sourcefile := args[0]
-	runBaseDir, runFile, runCmdDir, err := RunFilePaths(sourcefile)
+	sourceFile := args[0]
+	runBaseDir, runFile, runCmdDir, err := RunFilePaths(sourceFile)
 	if err != nil {
 		return err
 	}
 
 	compile := false
 
-	// Now must be called before Stat of sourcefile below,
+	// Now must be called before Stat of sourceFile below,
 	// so that changing the file between Stat and Chtimes still
 	// causes the file to be updated on the next run.
 	now := time.Now()
 
-	sstat, err := os.Stat(sourcefile)
+	sstat, err := os.Stat(sourceFile)
 	if err != nil {
 		return err
 	}
@@ -91,11 +312,11 @@ func Run(args []string) error {
 
 	for retry := 3; retry > 0; retry-- {
 		if compile {
-			err := Compile(sourcefile, runFile, runCmdDir)
+			err := Compile(sourceFile, runFile, runCmdDir)
 			if err != nil {
 				return err
 			}
-			// If sourcefile was changed, will be updated on next run.
+			// If sourceFile was changed, will be updated on next run.
 			os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
 		}
 
@@ -113,20 +334,37 @@ func Run(args []string) error {
 	return err
 }
 
+func sectionIndexes(content []byte, sectionName string) (found bool, startIdx int, startInnerIdx int, endInnerIdx int, endIdx int) {
+	start := header(sectionName)
+	end := trailer(sectionName)
+	startIdx = bytes.Index(content, []byte(start))
+	startInnerIdx = startIdx + len(start)
+	endInnerIdx = bytes.Index(content, []byte(end))
+	endIdx = endInnerIdx + len(end)
+	found = startIdx >= 0 && endIdx > startIdx
+	return
+}
+
 func getSection(content []byte, sectionName string) (section []byte) {
-	start := "// " + sectionName + " >>>"
-	end := "// <<< " + sectionName
-	startIdx := bytes.Index(content, []byte(start))
-	if startIdx >= 0 {
-		idxEnd := bytes.Index(content, []byte(end))
-		if idxEnd > startIdx {
-			goMod := string(content[startIdx+len(start) : idxEnd])
-			goMod = strings.ReplaceAll(goMod, "// ", "")
-			goMod = strings.ReplaceAll(goMod, "//", "")
-			return []byte(goMod)
-		}
+	found, _, startInnerIdx, endInnerIdx, _ := sectionIndexes(content, sectionName)
+	if found {
+		goMod := string(content[startInnerIdx:endInnerIdx])
+		goMod = strings.ReplaceAll(goMod, "// ", "")
+		goMod = strings.ReplaceAll(goMod, "//", "")
+		return []byte(goMod)
 	}
 	return []byte("")
+}
+
+func removeSection(content []byte, sectionName string) (startIdx int, newContent []byte) {
+	found, startIdx, _, _, endIdx := sectionIndexes(content, sectionName)
+	if found {
+		newContent = content[0:startIdx]
+		newContent = append(newContent, content[endIdx:len(content)]...)
+	} else {
+		newContent = content
+	}
+	return
 }
 
 func writeFileFromComments(content []byte, sectionName string, file string) (written bool, err error) {
@@ -143,9 +381,9 @@ func writeFileFromComments(content []byte, sectionName string, file string) (wri
 	return
 }
 
-// Compile compiles and links sourcefile and atomically renames the
+// Compile compiles and links sourceFile and atomically renames the
 // resulting binary to runfile.
-func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
+func Compile(sourceFile, runFile string, runCmdDir string) (err error) {
 	pid := strconv.Itoa(os.Getpid())
 
 	err = os.MkdirAll(runCmdDir, 0700)
@@ -153,7 +391,10 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 		return err
 	}
 	var writtenSource bool
-	content, err := ioutil.ReadFile(sourcefile)
+	content, err := ioutil.ReadFile(sourceFile)
+	if err != nil {
+		return
+	}
 	if len(content) > 2 && content[0] == '#' && content[1] == '!' {
 		content[0] = '/'
 		content[1] = '/'
@@ -184,9 +425,9 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 	// or if it has an embedded go.mod or go.sum
 	execDir := ""
 	if writtenSource || writtenMod || writtenSum {
-		sourcefile = runFile + "." + pid + ".go"
-		ioutil.WriteFile(sourcefile, content, 0600)
-		defer os.Remove(sourcefile)
+		sourceFile = runFile + "." + pid + ".go"
+		ioutil.WriteFile(sourceFile, content, 0600)
+		defer os.Remove(sourceFile)
 		execDir = runCmdDir
 	}
 
@@ -208,7 +449,7 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 
 	out := runFile + "." + pid
 
-	err = Exec(execDir, env, []string{gotool, "build", "-o", out, sourcefile})
+	err = Exec(execDir, env, []string{gotool, "build", "-o", out, sourceFile})
 	if err != nil {
 		return err
 	}
@@ -247,22 +488,15 @@ func Exec(dir string, env []string, args []string) error {
 // Note that runBaseDir contains directories for each gorun binary.
 // runFile is the full path to the cached gorun binary
 // runCmdDir is the directory inside runBaseDir where runFile lives.
-func RunFilePaths(sourcefile string) (runBaseDir, runFile string, runCmdDir string, err error) {
+func RunFilePaths(sourceFile string) (runBaseDir, runFile string, runCmdDir string, err error) {
 	runBaseDir, err = RunBaseDir()
+	sourceFile, err = realPath(sourceFile)
 	if err != nil {
 		return "", "", "", err
 	}
-	sourcefile, err = filepath.Abs(sourcefile)
-	if err != nil {
-		return "", "", "", err
-	}
-	sourcefile, err = filepath.EvalSymlinks(sourcefile)
-	if err != nil {
-		return "", "", "", err
-	}
-	pathElements := strings.Split(sourcefile, string(filepath.Separator))
+	pathElements := strings.Split(sourceFile, string(filepath.Separator))
 	baseFileName := pathElements[len(pathElements)-1]
-	runFile = strings.Replace(sourcefile, "_", "__", -1)
+	runFile = strings.Replace(sourceFile, "_", "__", -1)
 	runFile = strings.Replace(runFile, string(filepath.Separator), "ROOT_", 1)
 	runFile = strings.Replace(runFile, string(filepath.Separator), "_", -1)
 	runCmdDir = filepath.Join(runBaseDir, runFile) + string(filepath.Separator)
@@ -283,7 +517,7 @@ func canWrite(stat os.FileInfo, euid, egid int) bool {
 	return perm&02 != 0 || perm&020 != 0 && uint32(egid) == sstat.Gid || perm&0200 != 0 && uint32(euid) == sstat.Uid
 }
 
-// RunDir returns the directory where binary files generates should be put.
+// RunDir returns the directory where binary files generated should be put.
 // In case a safe directory isn't found, one will be created.
 func RunBaseDir() (rundir string, err error) {
 	tempdir := os.TempDir()
