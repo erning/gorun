@@ -40,6 +40,10 @@ func main() {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
+		args = append(args, ".")
+	}
+
+	if args[0] == "-h" || args[0] == "help" || args[0] == "-help" || args[0] == "--help" {
 		_, _ = fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
 		os.Exit(1)
 	}
