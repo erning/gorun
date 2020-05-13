@@ -42,7 +42,9 @@ func Usage() {
 	fmt.Fprintf(flag.CommandLine.Output(),
 		flag.CommandLine.Name()+`: Compile and run a go program directly.
 
-Options can be provided via GORUN_ARGS environment variable, or on the command line
+Options can be provided via GORUN_ARGS environment variable, or on the command line.
+If there exists a directory of the same name as the .go file, plus a trailing '_', that too will
+be copied and included in the build of the go program.
 
 `)
 	fmt.Fprintf(flag.CommandLine.Output(), "%s [options] <sourceFile.go>:\n", flag.CommandLine.Name())
@@ -277,8 +279,7 @@ func realPath(sourceFile string) (realPath string, err error) {
 // Run compiles and links the Go source file on args[0] and
 // runs it with arguments args[1:].
 func Run(args []string) error {
-	sourceFile := args[0]
-	runBaseDir, runFile, runCmdDir, err := RunFilePaths(sourceFile)
+	files, err := RunFilePaths(args[0])
 	if err != nil {
 		return err
 	}
@@ -290,37 +291,47 @@ func Run(args []string) error {
 	// causes the file to be updated on the next run.
 	now := time.Now()
 
-	sstat, err := os.Stat(sourceFile)
+	sstat, err := os.Stat(files.sourceFile)
 	if err != nil {
 		return err
 	}
+	// if we have an extra source directory, check whether it is newer than the binary as well.
+	if files.runExtraDir != "" {
+		filepath.Walk(files.runExtraDir, func(path string, info os.FileInfo, err error) error {
+			if info.ModTime().After(sstat.ModTime()) {
+				sstat = info
+			}
+			return nil
+		})
+	}
 
-	rstat, err := os.Stat(runFile)
+	rstat, err := os.Stat(files.runFile)
 	switch {
 	case err != nil:
 		compile = true
 	case rstat.Mode()&(os.ModeDir|os.ModeSymlink|os.ModeDevice|os.ModeNamedPipe|os.ModeSocket) != 0:
-		return errors.New("not a file: " + runFile)
+		return errors.New("not a file: " + files.runFile)
 	case rstat.ModTime().Before(sstat.ModTime()) || rstat.Mode().Perm()&0700 != 0700:
 		compile = true
+
 	default:
 		// We have spare cycles. Maybe remove old files.
-		if err := os.Chtimes(runBaseDir, now, now); err == nil {
-			CleanDir(runBaseDir, now)
+		if err := os.Chtimes(files.runBaseDir, now, now); err == nil {
+			CleanDir(files.runBaseDir, now)
 		}
 	}
 
 	for retry := 3; retry > 0; retry-- {
 		if compile {
-			err := Compile(sourceFile, runFile, runCmdDir)
+			err := Compile(files)
 			if err != nil {
 				return err
 			}
 			// If sourceFile was changed, will be updated on next run.
-			os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
+			os.Chtimes(files.runFile, sstat.ModTime(), sstat.ModTime())
 		}
 
-		err = syscall.Exec(runFile, args, os.Environ())
+		err = syscall.Exec(files.runFile, args, os.Environ())
 		if os.IsNotExist(err) {
 			// Got cleaned up under our feet.
 			compile = true
@@ -381,17 +392,50 @@ func writeFileFromComments(content []byte, sectionName string, file string) (wri
 	return
 }
 
+// simplistic copy files from one directory to another
+func copyDir(dstDir string, srcDir string) (err error) {
+	err = filepath.Walk(srcDir, func(srcPath string, f os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		relPath, err := filepath.Rel(srcDir, srcPath)
+		switch f.Mode() & os.ModeType {
+		case 0: // Regular file
+			content, err := ioutil.ReadFile(srcPath)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Failed to read (while copying) "+relPath+" to "+dstDir)
+				return err
+			}
+			err = ioutil.WriteFile(filepath.Join(dstDir, relPath), content, 0600)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Failed to write (while copying) "+relPath+" to "+dstDir)
+				return err
+			}
+		case os.ModeDir:
+			os.Mkdir(filepath.Join(dstDir, relPath), 0700)
+			return nil
+		default:
+			return fmt.Errorf("We only handle regular files, not %s", relPath)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return
+}
+
 // Compile compiles and links sourceFile and atomically renames the
 // resulting binary to runfile.
-func Compile(sourceFile, runFile string, runCmdDir string) (err error) {
+func Compile(files Files) (err error) {
 	pid := strconv.Itoa(os.Getpid())
 
-	err = os.MkdirAll(runCmdDir, 0700)
+	err = os.MkdirAll(files.runCmdDir, 0700)
 	if err != nil {
 		return err
 	}
 	var writtenSource bool
-	content, err := ioutil.ReadFile(sourceFile)
+	content, err := ioutil.ReadFile(files.sourceFile)
 	if err != nil {
 		return
 	}
@@ -405,7 +449,7 @@ func Compile(sourceFile, runFile string, runCmdDir string) (err error) {
 	// include <pid> in the name, but go build wants it called go.mod, so we could put
 	// it all in its separate directory and copy over when done.
 	// Write a go.mod file from inside the comments
-	modFile := runCmdDir + "go.mod"
+	modFile := files.runCmdDir + "go.mod"
 	os.Remove(modFile)
 	writtenMod, err := writeFileFromComments(content, "go.mod", modFile)
 	if err != nil {
@@ -414,21 +458,26 @@ func Compile(sourceFile, runFile string, runCmdDir string) (err error) {
 
 	// TODO as go.mod
 	// Write a go.sum file from inside the comments
-	sumFile := runCmdDir + "go.sum"
+	sumFile := files.runCmdDir + "go.sum"
 	os.Remove(sumFile)
 	writtenSum, err := writeFileFromComments(content, "go.sum", sumFile)
 	if err != nil {
 		return
 	}
-
+	written := writtenSource || writtenMod || writtenSum
+	// If we have an extra directory of go files, then copy them as well
+	if files.runExtraDir != "" {
+		copyDir(filepath.Join(files.runCmdDir, files.runExtraDirPart), files.runExtraDir)
+		written = true
+	}
 	// only copy the source file to the runCmdDir if something needs to be changed about it
-	// or if it has an embedded go.mod or go.sum
+	// or if it has an embedded go.mod or go.sum, or if it has extra files in a subdir
 	execDir := ""
-	if writtenSource || writtenMod || writtenSum {
-		sourceFile = runFile + "." + pid + ".go"
-		ioutil.WriteFile(sourceFile, content, 0600)
-		defer os.Remove(sourceFile)
-		execDir = runCmdDir
+	if  written {
+		files.sourceFile = files.runFile + "." + pid + ".go"
+		ioutil.WriteFile(files.sourceFile, content, 0600)
+		defer os.Remove(files.sourceFile)
+		execDir = files.runCmdDir
 	}
 
 	// use the default environment before adding our overrides
@@ -447,13 +496,13 @@ func Compile(sourceFile, runFile string, runCmdDir string) (err error) {
 		}
 	}
 
-	out := runFile + "." + pid
+	out := files.runFile + "." + pid
 
-	err = Exec(execDir, env, []string{gotool, "build", "-o", out, sourceFile})
+	err = Exec(execDir, env, []string{gotool, "build", "-o", out, files.sourceFile})
 	if err != nil {
 		return err
 	}
-	return os.Rename(out, runFile)
+	return os.Rename(out, files.runFile)
 }
 
 // Exec runs args[0] with args[1:] arguments and passes through
@@ -480,6 +529,16 @@ func Exec(dir string, env []string, args []string) error {
 	return nil
 }
 
+type Files struct {
+	sourceFile string
+	runBaseDir string
+	runFile string
+	runCmdDir string
+	runExtraDir string
+	baseFileName string
+	runExtraDirPart string
+}
+
 // RunFilePaths returns various paths involved in building and caching a gorun binary.
 //
 // Each cached gorun binary lives under its own directory to allow separate go.mod
@@ -488,21 +547,35 @@ func Exec(dir string, env []string, args []string) error {
 // Note that runBaseDir contains directories for each gorun binary.
 // runFile is the full path to the cached gorun binary
 // runCmdDir is the directory inside runBaseDir where runFile lives.
-func RunFilePaths(sourceFile string) (runBaseDir, runFile string, runCmdDir string, err error) {
-	runBaseDir, err = RunBaseDir()
+// runExtraDir is the final part of an optional directory of additional files to be compiled alongside
+// baseFileName is the name of the .go file, without ".go"
+func RunFilePaths(sourceFile string) (dir Files, err error) {
+	dir = Files{}
+	dir.runBaseDir, err = RunBaseDir()
 	sourceFile, err = realPath(sourceFile)
 	if err != nil {
-		return "", "", "", err
+		return Files{}, err
 	}
+	dir.sourceFile = sourceFile
 	pathElements := strings.Split(sourceFile, string(filepath.Separator))
-	baseFileName := pathElements[len(pathElements)-1]
-	runFile = strings.Replace(sourceFile, "_", "__", -1)
-	runFile = strings.Replace(runFile, string(filepath.Separator), "ROOT_", 1)
-	runFile = strings.Replace(runFile, string(filepath.Separator), "_", -1)
-	runCmdDir = filepath.Join(runBaseDir, runFile) + string(filepath.Separator)
+	bfn := pathElements[len(pathElements)-1]
+	dir.baseFileName = bfn[:len(bfn)-3]
 
-	runFile = runCmdDir
-	runFile += baseFileName + ".gorun"
+	dir.runExtraDir = sourceFile[:len(sourceFile)-3] + "_"
+
+	if _, err := os.Stat(dir.runExtraDir); err != nil {
+		dir.runExtraDir = ""
+	} else {
+		pathElements := strings.Split(dir.runExtraDir, string(filepath.Separator))
+		dir.runExtraDirPart = pathElements[len(pathElements)-1]
+	}
+
+	rf := strings.Replace(sourceFile, "_", "__", -1)
+	rf = strings.Replace(rf, string(filepath.Separator), "ROOT_", 1)
+	rf = strings.Replace(rf, string(filepath.Separator), "_", -1)
+	dir.runCmdDir = filepath.Join(dir.runBaseDir, rf) + string(filepath.Separator)
+
+	dir.runFile  = dir.runCmdDir + dir.baseFileName + ".gorun"
 
 	return
 }

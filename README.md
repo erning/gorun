@@ -34,6 +34,7 @@ gorun will:
   * pass arguments to the compiled application properly
   * handle well GOROOT, GOROOT_FINAL and the location of the toolchain
   * support embedded go.mod, go.sum and environment variables used for compiling - can ensure a repeatable build
+  * support more than one source file
 
 ## Is it slow?
 No, it's not, thanks to the Go (gc) compiler suite, which compiles code surprisingly fast.
@@ -49,7 +50,7 @@ $ time ./gorun hello.go
 Hello world!
 ./gorun hello.go  0.00s user 0.00s system 0% cpu 0.003 total
 
-$ time python -c 'print "Hello world!"'                                                        
+$ time python -c 'print "Hello world!"'
 Hello world!
 python -c 'print "Hello world!"'  0.01s user 0.00s system 63% cpu 0.016 total
 
@@ -71,9 +72,9 @@ You can remove these files, but there's no reason to do this. These compiled fil
 There are Ubuntu packages available that include gorun:
 
 ```
-$ sudo add-apt-repository ppa:gophers/go 
-$ sudo apt-get update 
-$ sudo apt-get install golang 
+$ sudo add-apt-repository ppa:gophers/go
+$ sudo apt-get update
+$ sudo apt-get install golang
 ```
 
 ## How to build and install gorun from source
@@ -104,9 +105,9 @@ This document is licensed under Creative Commons Attribution-ShareAlike 3.0 Lice
 To get in touch, send a message to gustavo.niemeyer@canonical.com
 
 ## Repeatable builds
-To protect against changing/different dependencies compiled with the script, it supports embedding 
+To protect against changing/different dependencies compiled with the script, it supports embedding
 go.mod, go.sum contents and environment variables in the file as a comment. Fictitious example:
-    
+
     // go.mod >>>
     // module github.com/a/b
     // go 1.13
@@ -122,9 +123,9 @@ go.mod, go.sum contents and environment variables in the file as a comment. Fict
     // go.sum >>>
     // github.com/c v0.0.0-20190308221718-c2843e01d9a2/go.mod h1:djNgcEr1/C05ACkg1iLfiJU5Ep61QUkGW8qpdssI0+w=
     // <<< go.sum
-    
+
     package main
-    
+
     import (
     ...
 
@@ -148,6 +149,21 @@ Extract the commented sections of go.mod/go.sum to files alongside the source fi
 A default that allows developing and auto including the go.mod/go.sum in to the source file would be:
 
     GORUN_ARGS="-embed" gorun sourcefile.go
-    
+
 For safety, the above by default will not embed files if the sourcefile lives under /bin /sbin /opt or /usr.
 Set -embedIgnoreRegex to '.*' to override this behaviour
+
+## Extra source files
+
+gorun supports including any extra source files when the "script" grows a little too large for a single file,
+and also allows multiple "scripts" to all live at the same place on the PATH, e.g. all in /usr/local/bin.
+
+Place any extra source files in a directory with the same name as the source .go, replacing ".go" with "_". e.g.
+
+    ./httpServe.go
+    ./httpServe_/net/auth.go
+    ./httpServe_/net/reply.go
+    ./httpServe_/db/sql.go
+
+Then import "httpServe/httpServe_/net" in httpServe.go etc.
+
