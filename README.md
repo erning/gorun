@@ -16,6 +16,20 @@ func main() {
 }
 ```
 
+Or if you like your file to be compatible with other tools, use:
+
+```go
+/// 2>/dev/null; gorun $0 $@; exit $?
+
+package main
+
+func main() {
+    println("Hello world!")
+}
+```
+
+The above is a valid Go source file, and works normally in, e.g., your IDE. Note that the reason this hack is needed is because Go deliberately does not support `#!` as a comment syntax because they [like](https://groups.google.com/g/golang-nuts/c/iGHWoUQFHjg/discussion) making your tradeoffs for you.
+
 Then, simply run it:
 
 ```
@@ -61,6 +75,17 @@ python -c 'print "Hello world!"'  0.00s user 0.01s system 64% cpu 0.016 total
 Note how the second run is significantly faster than the first one. This happens because a cached version of the file is used after the first compilation.
 
 gorun will correctly recompile the file whenever necessary.
+
+Here is a more sophisticated comparison via [hyperfine](https://github.com/sharkdp/hyperfine):
+
+`hyperfine --export-markdown hf.md --warmup 10 'gorun ./hello.go' './hello' "python3 -c 'print(\"Hello world\")'"`
+
+| Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
+|:---|---:|---:|---:|---:|
+| `gorun ./hello.go` | 9.3 ± 3.8 | 5.7 | 36.5 | 2.11 ± 1.43 |
+| `./hello` | 4.4 ± 2.4 | 1.1 | 17.4 | 1.00 |
+| `python3 -c 'print("Hello world")'` | 42.2 ± 2.9 | 37.6 | 48.7 | 9.62 ± 5.26 |
+
 
 ## Where are the compiled files kept?
 They are kept under $TMPDIR (or tmp), in a directory named after the hostname and user id executing the file.
