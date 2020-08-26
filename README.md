@@ -19,7 +19,7 @@ func main() {
 Or if you like your file to be compatible with other tools, use:
 
 ```go
-/// 2>/dev/null; gorun $0 $@; exit $?
+/// 2>/dev/null ; gorun "$0" "$@" ; exit $?
 
 package main
 
