@@ -50,11 +50,11 @@ func main() {
 
 	err := Run(args)
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "error: "+err.Error())
+		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
-
-	panic("unreachable")
+	fmt.Fprintln(os.Stderr, "An uncaught error has occurred.")
+	os.Exit(1)
 }
 
 // Run compiles and links the Go source file on args[0] and
@@ -332,7 +332,6 @@ func RunBaseDir() (rundir string, err error) {
 		i++
 		prefixi = prefix + "-" + strconv.FormatUint(i, 10)
 	}
-	panic("unreachable")
 }
 
 const CleanFileDelay = time.Hour * 24 * 7
@@ -377,7 +376,9 @@ func CleanDir(runBaseDir string, now time.Time) error {
 	return nil
 }
 
+/*
 // TheChar returns the magic architecture char.
+// We should find out if we need this or not.
 func TheChar() string {
 	switch runtime.GOARCH {
 	case "386":
@@ -389,3 +390,4 @@ func TheChar() string {
 	}
 	panic("unknown GOARCH: " + runtime.GOARCH)
 }
+*/
