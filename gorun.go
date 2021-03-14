@@ -140,7 +140,7 @@ func getSection(content []byte, sectionName string) (section []byte) {
 }
 
 func writeFileFromComments(content []byte, sectionName string, file string) (written bool, err error) {
-	// Write a go.mod file from inside the comments
+	// Write go.mod and go.sum files from inside the comments
 	section := getSection(content, sectionName)
 	if len(section) > 0 {
 		err = ioutil.WriteFile(file, section, 0600)
@@ -181,7 +181,6 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 		return
 	}
 
-	// TODO as go.mod
 	// Write a go.sum file from inside the comments
 	sumFile := runCmdDir + "go.sum"
 	os.Remove(sumFile)
