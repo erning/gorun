@@ -44,7 +44,7 @@ func main() {
 	}
 
 	if args[0] == "-h" || args[0] == "help" || args[0] == "-help" || args[0] == "--help" {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
+		fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
 		os.Exit(1)
 	}
 
