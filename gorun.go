@@ -89,7 +89,10 @@ func Run(args []string) error {
 	default:
 		// We have spare cycles. Maybe remove old files.
 		if err := os.Chtimes(runBaseDir, now, now); err == nil {
-			CleanDir(runBaseDir, now)
+			cDirErr := CleanDir(runBaseDir, now)
+			if cDirErr != nil {
+				return cDirErr
+			}
 		}
 	}
 
@@ -100,7 +103,10 @@ func Run(args []string) error {
 				return err
 			}
 			// If sourcefile was changed, will be updated on next run.
-			os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
+			err = os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
+			if err != nil {
+				return err
+			}
 		}
 
 		err = syscall.Exec(runFile, args, os.Environ())
@@ -189,7 +195,10 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 	execDir := ""
 	if writtenSource || writtenMod || writtenSum {
 		sourcefile = runFile + "." + pid + ".go"
-		ioutil.WriteFile(sourcefile, content, 0600)
+		err := ioutil.WriteFile(sourcefile, content, 0600)
+		if err != nil {
+			return err
+		}
 		defer os.Remove(sourcefile)
 		execDir = runCmdDir
 	}
@@ -355,6 +364,9 @@ func CleanDir(runBaseDir string, now time.Time) error {
 		return err
 	}
 	infos, err := d.Readdir(-1)
+	if err != nil {
+		return err
+	}
 	for _, info := range infos {
 		atim := atime(info)
 		access := time.Unix(int64(atim.Sec), int64(atim.Nsec))
