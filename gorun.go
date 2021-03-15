@@ -40,17 +40,21 @@ func main() {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
+		args = append(args, ".")
+	}
+
+	if args[0] == "-h" || args[0] == "help" || args[0] == "-help" || args[0] == "--help" {
+		fmt.Fprintln(os.Stderr, "usage: gorun <source file> [...]")
 		os.Exit(1)
 	}
 
 	err := Run(args)
 	if err != nil {
-		_, _ = fmt.Fprintln(os.Stderr, "error: "+err.Error())
+		fmt.Fprintln(os.Stderr, "error: "+err.Error())
 		os.Exit(1)
 	}
-
-	panic("unreachable")
+	fmt.Fprintln(os.Stderr, "An uncaught error has occurred.")
+	os.Exit(1)
 }
 
 // Run compiles and links the Go source file on args[0] and
@@ -85,7 +89,10 @@ func Run(args []string) error {
 	default:
 		// We have spare cycles. Maybe remove old files.
 		if err := os.Chtimes(runBaseDir, now, now); err == nil {
-			CleanDir(runBaseDir, now)
+			cDirErr := CleanDir(runBaseDir, now)
+			if cDirErr != nil {
+				return cDirErr
+			}
 		}
 	}
 
@@ -96,7 +103,10 @@ func Run(args []string) error {
 				return err
 			}
 			// If sourcefile was changed, will be updated on next run.
-			os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
+			err = os.Chtimes(runFile, sstat.ModTime(), sstat.ModTime())
+			if err != nil {
+				return err
+			}
 		}
 
 		err = syscall.Exec(runFile, args, os.Environ())
@@ -130,7 +140,7 @@ func getSection(content []byte, sectionName string) (section []byte) {
 }
 
 func writeFileFromComments(content []byte, sectionName string, file string) (written bool, err error) {
-	// Write a go.mod file from inside the comments
+	// Write go.mod and go.sum files from inside the comments
 	section := getSection(content, sectionName)
 	if len(section) > 0 {
 		err = ioutil.WriteFile(file, section, 0600)
@@ -171,7 +181,6 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 		return
 	}
 
-	// TODO as go.mod
 	// Write a go.sum file from inside the comments
 	sumFile := runCmdDir + "go.sum"
 	os.Remove(sumFile)
@@ -185,7 +194,10 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 	execDir := ""
 	if writtenSource || writtenMod || writtenSum {
 		sourcefile = runFile + "." + pid + ".go"
-		ioutil.WriteFile(sourcefile, content, 0600)
+		err := ioutil.WriteFile(sourcefile, content, 0600)
+		if err != nil {
+			return err
+		}
 		defer os.Remove(sourcefile)
 		execDir = runCmdDir
 	}
@@ -319,7 +331,6 @@ func RunBaseDir() (rundir string, err error) {
 		i++
 		prefixi = prefix + "-" + strconv.FormatUint(i, 10)
 	}
-	panic("unreachable")
 }
 
 const CleanFileDelay = time.Hour * 24 * 7
@@ -351,6 +362,9 @@ func CleanDir(runBaseDir string, now time.Time) error {
 		return err
 	}
 	infos, err := d.Readdir(-1)
+	if err != nil {
+		return err
+	}
 	for _, info := range infos {
 		atim := atime(info)
 		access := time.Unix(int64(atim.Sec), int64(atim.Nsec))
@@ -361,7 +375,9 @@ func CleanDir(runBaseDir string, now time.Time) error {
 	return nil
 }
 
+/*
 // TheChar returns the magic architecture char.
+// We should find out if we need this or not.
 func TheChar() string {
 	switch runtime.GOARCH {
 	case "386":
@@ -373,3 +389,4 @@ func TheChar() string {
 	}
 	panic("unknown GOARCH: " + runtime.GOARCH)
 }
+*/
