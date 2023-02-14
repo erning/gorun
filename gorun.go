@@ -163,7 +163,7 @@ func Compile(sourcefile, runFile string, runCmdDir string) (err error) {
 		return err
 	}
 	var writtenSource bool
-	content, err := ioutil.ReadFile(sourcefile)
+	content, _ := ioutil.ReadFile(sourcefile)
 	if len(content) > 2 && content[0] == '#' && content[1] == '!' {
 		content[0] = '/'
 		content[1] = '/'
