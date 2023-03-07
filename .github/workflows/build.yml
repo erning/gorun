@@ -4,16 +4,18 @@ jobs:
   build:
     strategy:
       matrix:
-        go-version: [1.12.x, 1.20.x]
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+        go-version: ['1.12.x', 'stable']
+        os: ['linux', 'darwin', 'freebsd', 'netbsd']
+    runs-on: ubuntu-latest
     steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
     - name: Install Go
       uses: actions/setup-go@v3
       with:
         go-version: ${{ matrix.go-version }}
         check-latest: true
-    - name: Checkout code
-      uses: actions/checkout@v3
     - name: Build
+      env:
+        GOOS: ${{ matrix.os }}
       run: go build
