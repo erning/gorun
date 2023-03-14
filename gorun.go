@@ -131,8 +131,8 @@ func getSection(content []byte, sectionName string) (section []byte) {
 		idxEnd := bytes.Index(content, []byte(end))
 		if idxEnd > startIdx {
 			goMod := string(content[startIdx+len(start) : idxEnd])
-			goMod = strings.ReplaceAll(goMod, "// ", "")
-			goMod = strings.ReplaceAll(goMod, "//", "")
+			goMod = strings.ReplaceAll(goMod, "\n// ", "\n")
+			goMod = strings.ReplaceAll(goMod, "\n//", "\n")
 			return []byte(goMod)
 		}
 	}
